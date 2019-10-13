@@ -2,12 +2,11 @@ from collections import OrderedDict
 
 import numpy as np
 from spacy.lang.en.stop_words import STOP_WORDS
-from spacy.lang.en import English
 
 from app import translator, nlp
 
 
-class TextRank4Keyword:
+class KeywordRanking:
     """
         Extract keywords from text
         Example:
@@ -17,29 +16,48 @@ class TextRank4Keyword:
                 .get_keywords(10)
     """
 
-    def __init__(self, damp_coef: float = 0.85, min_diff: float = 1e-5, steps: int = 10):
+    def __init__(self, text: str,
+                 candidate_pos: list = None,
+                 window_size: int = 4,
+                 damp_coef: float = 0.85,
+                 min_diff: float = 1e-5,
+                 steps: int = 10,
+                 stopwords: set = None,
+                 to_lower: bool = True):
+        self.candidate_pos = candidate_pos if candidate_pos else ['NOUN', 'PRON']
+        self.window_size = window_size
         self.damp_coef = damp_coef  # damping coefficient, usually is .85
         self.min_diff = min_diff  # convergence threshold
         self.steps = steps  # iteration steps
         self.node_weight = None  # save keywords and its weight
+        self.stopwords = stopwords
+        self.to_lower = to_lower
+        self.doc = nlp(text)
 
-    def _set_stopwords(self, stopwords: list) -> 'TextRank4Keyword':
+    def __enter__(self):
+        return self.analyze()
 
-        for word in STOP_WORDS.union(set(stopwords)):
+    def __exit__(self, *args, **kwargs):
+        self.node_weight = None
+
+    def _set_stopwords(self) -> 'KeywordRanking':
+        stop_words = STOP_WORDS.union(self.stopwords) if self.stopwords else STOP_WORDS
+
+        for word in stop_words:
             lexeme = nlp.vocab[word]
             lexeme.is_stop = True
 
         return self
 
-    def _sentence_segment(self, doc: English, candidate_pos: list, lower: bool) -> list:
+    def _sentence_segment(self) -> list:
         """Store those words only in cadidate_pos"""
         sentences = []
-        for sent in doc.sents:
+        for sent in self.doc.sents:
             selected_words = []
             for token in sent:
                 # Store words only with cadidate POS tag
-                if token.pos_ in candidate_pos and token.is_stop is False:
-                    if lower is True:
+                if token.pos_ in self.candidate_pos and token.is_stop is False:
+                    if self.to_lower is True:
                         selected_words.append(token.text.lower())
                     else:
                         selected_words.append(token.text)
@@ -57,12 +75,12 @@ class TextRank4Keyword:
                     i += 1
         return vocab
 
-    def _get_token_pairs(self, window_size: int, sentences: list) -> list:
+    def _get_token_pairs(self, sentences: list) -> list:
         """Build token_pairs from windows in sentences"""
         token_pairs = list()
         for sentence in sentences:
             for i, word in enumerate(sentence):
-                for j in range(i + 1, i + window_size):
+                for j in range(i + 1, i + self.window_size):
                     if j >= len(sentence):
                         break
                     pair = (word, sentence[j])
@@ -91,7 +109,7 @@ class TextRank4Keyword:
 
         return g_norm
 
-    def get_keywords(self, number: int = 10, limit: int = 1) -> list:
+    def write_keywords(self, number: int = 10, limit: int = 1) -> 'KeywordRanking':
         """Print top number keywords"""
         node_weight = OrderedDict(sorted(self.node_weight.items(), key=lambda t: t[1], reverse=True))
         keywords = []
@@ -101,29 +119,23 @@ class TextRank4Keyword:
             elif value >= limit:
                 keywords.append([key, translator.translate(key, src='en', dest='ru').text, value])
 
-        return keywords
+        print(keywords)
+        return self
 
-    def analyze(self, text: str,
-                candidate_pos: list = None,
-                window_size: int = 4,
-                lower: bool = False,
-                stopwords: list = None) -> 'TextRank4Keyword':
+    def analyze(self) -> 'KeywordRanking':
         """Main function to analyze text"""
 
-        if stopwords:
-            self._set_stopwords(stopwords)
-
-        doc = nlp(text)
+        self._set_stopwords()
 
         # Filter sentences
-        sentences = self._sentence_segment(doc, candidate_pos, lower)
+        sentences = self._sentence_segment()
         vocab = self._get_vocab(sentences)
-        token_pairs = self._get_token_pairs(window_size, sentences)
+        token_pairs = self._get_token_pairs(sentences)
 
         # Get normalized matrix
         g = self._get_matrix(vocab, token_pairs)
 
-        # Initionlization for weight(pagerank value)
+        # Initialization for weight
         pr = np.array([1] * len(vocab))
 
         previous_pr = 0
