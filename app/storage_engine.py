@@ -19,9 +19,9 @@ class Storage:
             self._data = json.load(json_file)
         return self
 
-    def write(self) -> 'Storage':
+    def write(self, data: dict = None) -> 'Storage':
         with open(self.path, 'w', encoding=self.encoding) as json_file:
-            json.dump(self._data, json_file)
+            json.dump(data if data else self._data, json_file)
         return self
 
     @property

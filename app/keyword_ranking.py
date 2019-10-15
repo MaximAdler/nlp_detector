@@ -1,22 +1,25 @@
 from collections import OrderedDict
+from copy import deepcopy
 
 import numpy as np
 from spacy.lang.en.stop_words import STOP_WORDS
 
 from app import translator, nlp
+from app.storage_engine import Storage
 
 
 class KeywordRanking:
     """
         Extract keywords from text
         Example:
-            tr4w = TextRank4Keyword()
-            tr4w \
-                .analyze(content, candidate_pos = ['NOUN', 'PRON'], window_size=4, lower=True) \
-                .get_keywords(10)
+            with KeywordRanking(path='data.json', date='13-10-2019', index=0) as kr:
+                kr.write_keywords()
     """
 
-    def __init__(self, text: str,
+    def __init__(self, path: str = None,
+                 date: str = None,
+                 index: int = None,
+                 text: str = None,
                  candidate_pos: list = None,
                  window_size: int = 4,
                  damp_coef: float = 0.85,
@@ -24,15 +27,34 @@ class KeywordRanking:
                  steps: int = 10,
                  stopwords: set = None,
                  to_lower: bool = True):
+
+        if text and path:
+            raise BaseException('text OR path should be passed, not both.')
+        elif not text and not path:
+            raise BaseException('path or text should be passed.')
+        elif (not date or len(date.split('-')) != 3) and path:
+            raise BaseException('If path exists, date should be passed in format dd-MM-yyyy.')
+        elif index is None and path:
+            raise BaseException('If path exists, index should be passed.')
+
+        if text:
+            text = translator.translate(text, src='ru', dest='en').text
+        elif path:
+            with Storage(path=path) as storage:
+                text = translator.translate(storage.data[date][str(index)], src='ru', dest='en').text
+
+        self.doc = nlp(text)
+        self.date = date
+        self.index = index
+
         self.candidate_pos = candidate_pos if candidate_pos else ['NOUN', 'PRON']
         self.window_size = window_size
-        self.damp_coef = damp_coef  # damping coefficient, usually is .85
-        self.min_diff = min_diff  # convergence threshold
-        self.steps = steps  # iteration steps
-        self.node_weight = None  # save keywords and its weight
+        self.damp_coef = damp_coef
+        self.min_diff = min_diff
+        self.steps = steps
         self.stopwords = stopwords
         self.to_lower = to_lower
-        self.doc = nlp(text)
+        self.node_weight = None
 
     def __enter__(self):
         return self.analyze()
@@ -109,17 +131,35 @@ class KeywordRanking:
 
         return g_norm
 
-    def write_keywords(self, number: int = 10, limit: int = 1) -> 'KeywordRanking':
+    def write_keywords(self, number: int = 10, limit: int = 1.3) -> 'KeywordRanking':
         """Print top number keywords"""
         node_weight = OrderedDict(sorted(self.node_weight.items(), key=lambda t: t[1], reverse=True))
-        keywords = []
-        for i, (key, value) in enumerate(node_weight.items()):
-            if i > number:
-                break
-            elif value >= limit:
-                keywords.append([key, translator.translate(key, src='en', dest='ru').text, value])
 
-        print(keywords)
+        if self.date and self.index is not None:
+            with Storage('statistics.json') as storage:
+                data = deepcopy(storage.data)
+
+                for i, (key, value) in enumerate(node_weight.items()):
+                    if value >= limit:
+                        if i > number:
+                            break
+                        if key not in data:
+                            data[key] = {
+                                'ru': translator.translate(key, src='en', dest='ru').text,
+                                'date_index': [[self.date, str(self.index)]]
+                            }
+                        elif [self.date, str(self.index)] not in data[key]['date_index']:
+                            data[key]['date_index'].append([self.date, str(self.index)])
+                if data != storage.data:
+                    storage.write(data=data)
+        else:
+            keywords = []
+            for i, (key, value) in enumerate(node_weight.items()):
+                if i > number:
+                    break
+                elif value >= limit:
+                    keywords.append([key, translator.translate(key, src='en', dest='ru').text, value])
+            print(f'{keywords[0]} = {keywords[1]} - {keywords[2]}')
         return self
 
     def analyze(self) -> 'KeywordRanking':
